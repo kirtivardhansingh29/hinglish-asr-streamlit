@@ -1,636 +1,678 @@
 """
-Hinglish ASR — Streamlit Web Interface
-=======================================
-
-Project : ESP32-S3 Edge Hinglish ASR
-
-Backend : Modal Serverless (FastAPI)
-GitHub  : https://github.com/kirtivardhansingh29/hinglish-asr-streamlit
+Hinglish ASR — Live Caption Streamlit App
+==========================================
+Real-time Hinglish speech transcription via chunked audio recording.
+Audio is captured in the browser, sent to the ASR API every few seconds,
+and displayed as live captions with latency stats.
 """
 
 import streamlit as st
-import requests
-import time
-import io
-import base64
-from datetime import datetime
+import streamlit.components.v1 as components
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIG
+# PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-PRIMARY_API  = "https://ahamkirtivardhansingh--hinglish-asr-api-fastapi-app-dev.modal.run/transcribe"
-FALLBACK_API = "https://dhruv-04--esp32-whisper-hinglish-fastapi-app.modal.run/transcribe"
-API_TIMEOUT  = 60
-MAX_FILE_MB  = 25
-
 st.set_page_config(
-    page_title="Hinglish ASR · Kirti Vardhan Singh",
+    page_title="Hinglish ASR — Live Captions",
     page_icon="🎙️",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSS
+# GLOBAL CSS — hide Streamlit chrome, inject fonts
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
-
-html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400&display=swap');
 #MainMenu, footer, header { visibility: hidden; }
-.block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 740px; }
-
-/* ── Hero ── */
-.hero { margin-bottom: 4px; }
-.hero-eyebrow {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 9px; letter-spacing: 3px;
-    color: #8a8680; text-transform: uppercase; margin-bottom: 6px;
-}
-.hero-title {
-    font-size: 32px; font-weight: 600;
-    color: #1a1816; letter-spacing: -0.5px; line-height: 1.1;
-    margin: 0 0 6px 0;
-}
-.hero-subtitle {
-    font-size: 13px; color: #5a5650; line-height: 1.6; margin-bottom: 0;
-}
-.hero-author {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 10px; color: #9a9690; letter-spacing: 1px; margin-top: 8px;
-}
-.hero-author span { color: #2a2826; font-weight: 500; }
-
-/* ── Model pill ── */
-.model-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: #f0ece4; border: 1px solid #d4d0c8;
-    border-radius: 3px; padding: 4px 10px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 9px; letter-spacing: 1px; color: #3a3630;
-    margin-top: 10px; margin-right: 6px;
-}
-.model-dot { width: 6px; height: 6px; border-radius: 50%; background: #62DE61; }
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 0; border-bottom: 1px solid #d4d0c8;
-    background: transparent;
-}
-.stTabs [data-baseweb="tab"] {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 10px; letter-spacing: 1.5px;
-    padding: 10px 20px; color: #8a8680;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-}
-.stTabs [aria-selected="true"] {
-    color: #1a1816 !important;
-    border-bottom: 2px solid #1a1816 !important;
-    background: transparent !important;
-}
-
-/* ── Divider ── */
-.thin-divider { height: 1px; background: #e0dcd4; margin: 18px 0; }
-
-/* ── Mic recorder embed ── */
-.recorder-wrap {
-    background: #f8f6f2; border: 1px solid #e0dcd4;
-    border-radius: 6px; padding: 0; overflow: hidden;
-}
-
-/* ── Result ── */
-.result-box {
-    background: #ffffff; border: 1.5px solid #2a2826;
-    border-radius: 4px; padding: 18px 20px;
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 16px; font-weight: 300; line-height: 1.8;
-    color: #1a1816; min-height: 64px; word-break: break-word;
-}
-.meta-row {
-    display: flex; justify-content: space-between;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 9px; color: #9a9690;
-    letter-spacing: 0.5px; margin-top: 6px;
-    flex-wrap: wrap; gap: 4px;
-}
-.ep-primary  { color: #1565c0; }
-.ep-fallback { color: #e65100; }
-
-/* ── Chips ── */
-.chip {
-    display: inline-block; padding: 3px 10px;
-    border-radius: 2px; font-family: 'IBM Plex Mono', monospace;
-    font-size: 9px; letter-spacing: 1px; font-weight: 500;
-}
-.chip-info  { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
-.chip-ok    { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
-
-/* ── History ── */
-.history-entry { border-left: 2px solid #e0dcd4; padding: 6px 0 6px 14px; margin-bottom: 10px; }
-.history-text  { font-size: 13px; color: #1a1816; line-height: 1.6; }
-.history-meta  { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #9a9690; margin-top: 2px; }
-
-/* ── Status indicator ── */
-.status-bar {
-    display: flex; align-items: center; gap: 8px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 9px; color: #8a8680; letter-spacing: 1px;
-    padding: 8px 0; margin-bottom: 4px;
-}
-.status-dot { width: 6px; height: 6px; border-radius: 50%; }
-.dot-green  { background: #62DE61; }
-.dot-orange { background: #ffaa00; animation: pulse-dot 1s ease-in-out infinite; }
-.dot-red    { background: #ff4444; }
-@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.block-container { padding: 0 !important; max-width: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION STATE
+# FULL APP — rendered as a single self-contained HTML component
+# All logic (MediaRecorder, chunked fetch, caption rendering) lives here.
+# The component fills the viewport so it feels like a standalone app.
 # ─────────────────────────────────────────────────────────────────────────────
-for k, v in {
-    "history": [], "last_result": None, "last_engine": None,
-    "last_duration": None, "error_msg": None, "total_calls": 0,
-    "recording_status": "idle",  # idle | recording | processing
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
 
+API_ENDPOINT = "https://dhruv-kum-photos--esp32-whisper-hinglish-fastapi-app.modal.run/transcribe"
+CHUNK_MS     = 4000   # record 4s → send → caption → repeat
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TRANSCRIPTION — primary → fallback with auto-retry
-# ─────────────────────────────────────────────────────────────────────────────
-FALLBACK_STATUSES = {429, 503, 502}
+APP_HTML = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+/* ── Reset ── */
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+:root {{
+  --bg:       #0d0d0d;
+  --surface:  #141414;
+  --surface2: #1c1c1c;
+  --border:   #262626;
+  --text:     #f0ede8;
+  --dim:      #6b6b6b;
+  --mid:      #9a9a9a;
+  --accent:   #5a9fff;
+  --live:     #4ade80;
+  --live-dim: #14532d;
+  --warn:     #fb923c;
+  --mono:     'JetBrains Mono', monospace;
+  --sans:     'Space Grotesk', sans-serif;
+}}
+html, body {{
+  height: 100%; background: var(--bg);
+  color: var(--text); font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}}
+body {{ display: flex; flex-direction: column; height: 100vh; }}
 
-def transcribe(audio_bytes: bytes, filename: str = "audio.webm") -> dict:
-    def post(url):
-        files = {"file": (filename, io.BytesIO(audio_bytes), "audio/webm")}
-        return requests.post(url, files=files, timeout=API_TIMEOUT)
+/* ── Top bar ── */
+.topbar {{
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 32px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; background: var(--bg);
+}}
+.brand {{ font-size: 14px; font-weight: 600; letter-spacing: -0.2px; }}
+.badges {{ display: flex; gap: 8px; align-items: center; }}
+.badge {{
+  font-family: var(--mono); font-size: 9px; letter-spacing: 1.5px;
+  color: var(--dim); background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 3px 8px; text-transform: uppercase;
+}}
+.status-row {{ display: flex; align-items: center; gap: 6px; }}
+.sdot {{
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--border); transition: background 0.3s; flex-shrink: 0;
+}}
+.sdot.live {{ background: var(--live); box-shadow: 0 0 6px var(--live); animation: pl 1.5s ease-in-out infinite; }}
+.sdot.proc {{ background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: pl 0.6s ease-in-out infinite; }}
+.sdot.err  {{ background: var(--warn); }}
+@keyframes pl {{ 0%,100%{{opacity:1}} 50%{{opacity:0.35}} }}
+.slbl {{ font-family: var(--mono); font-size: 9px; letter-spacing: 1px; color: var(--dim); text-transform: uppercase; }}
+.slbl.live {{ color: var(--live); }}
+.slbl.proc {{ color: var(--accent); }}
 
-    t0 = time.time()
-    try:
-        res   = post(PRIMARY_API)
-        engine = "primary"
-    except requests.Timeout:
-        try:
-            res    = post(FALLBACK_API)
-            engine = "fallback"
-        except requests.Timeout:
-            return {"text": None, "engine": None, "duration_s": None,
-                    "error": "Both endpoints timed out (60s). Modal may be cold-starting — try again in 30s."}
-        except Exception as e:
-            return {"text": None, "engine": None, "duration_s": None, "error": str(e)}
-    except Exception as e:
-        return {"text": None, "engine": None, "duration_s": None, "error": str(e)}
+/* ── Main ── */
+.main {{
+  flex: 1; display: flex; flex-direction: column;
+  max-width: 960px; width: 100%; margin: 0 auto;
+  padding: 0 32px; min-height: 0;
+}}
 
-    if engine == "primary" and res.status_code in FALLBACK_STATUSES:
-        try:
-            res    = post(FALLBACK_API)
-            engine = "fallback"
-        except Exception:
-            pass
+/* ── Caption stage ── */
+.stage {{
+  flex: 1; display: flex; flex-direction: column;
+  justify-content: flex-end; padding: 32px 0 24px;
+  position: relative; min-height: 0;
+}}
+.ghost {{
+  position: absolute; inset: 0; display: flex;
+  flex-direction: column; align-items: center;
+  justify-content: center; gap: 14px;
+  transition: opacity 0.4s; pointer-events: none;
+}}
+.ghost.hidden {{ opacity: 0; }}
+.ghost-icon {{
+  width: 52px; height: 52px; border-radius: 50%;
+  border: 1.5px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; color: var(--dim);
+}}
+.ghost-txt {{ font-size: 13px; color: var(--dim); text-align: center; line-height: 1.7; }}
+.ghost-txt strong {{ color: var(--mid); font-weight: 500; }}
 
-    duration = round(time.time() - t0, 2)
+.hist-wrap {{ display: flex; flex-direction: column; gap: 0; margin-bottom: 6px; }}
+.hist-line {{
+  font-size: 18px; font-weight: 300; color: var(--dim);
+  line-height: 1.6; letter-spacing: -0.1px; padding: 1px 0;
+  transition: opacity 0.5s;
+}}
+.caption-cur {{
+  font-size: 30px; font-weight: 400; color: var(--text);
+  line-height: 1.45; letter-spacing: -0.3px; min-height: 44px;
+}}
+.word-new {{
+  display: inline-block;
+  animation: wi 0.22s ease-out forwards;
+}}
+@keyframes wi {{ from{{opacity:0;transform:translateY(5px)}} to{{opacity:1;transform:translateY(0)}} }}
+.caret {{
+  display: inline-block; width: 2px; height: 1em;
+  background: var(--accent); margin-left: 3px;
+  vertical-align: text-bottom;
+  animation: cb 0.9s step-end infinite;
+}}
+@keyframes cb {{ 0%,100%{{opacity:1}} 50%{{opacity:0}} }}
+.caret.off {{ display: none; }}
 
-    if not res.ok:
-        try:    body = res.json().get("detail", res.text[:120])
-        except: body = res.text[:120]
-        return {"text": None, "engine": engine, "duration_s": duration,
-                "error": f"HTTP {res.status_code}: {body}"}
-    try:
-        data = res.json()
-    except:
-        return {"text": None, "engine": engine, "duration_s": duration,
-                "error": "Invalid JSON from API."}
+/* ── Waveform ── */
+.wv-wrap {{
+  height: 48px; position: relative;
+  margin: 0 0 18px; overflow: hidden; border-radius: 4px;
+}}
+canvas {{ width: 100%; height: 100%; display: block; }}
+.wv-fade {{
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, var(--bg) 0%, transparent 48px, transparent calc(100% - 48px), var(--bg) 100%);
+  pointer-events: none;
+}}
 
-    text = data.get("transcription") or data.get("text") or data.get("result") or str(data)
-    return {"text": text, "engine": engine, "duration_s": duration, "error": None}
+/* ── Stats strip ── */
+.stats {{
+  display: flex; gap: 20px; align-items: center;
+  padding: 10px 0 14px; border-top: 1px solid var(--border);
+}}
+.stat {{ display: flex; flex-direction: column; gap: 2px; }}
+.sval {{
+  font-family: var(--mono); font-size: 20px; font-weight: 300;
+  color: var(--text); letter-spacing: -0.5px; line-height: 1;
+}}
+.slabel {{ font-family: var(--mono); font-size: 8px; letter-spacing: 1.5px; color: var(--dim); text-transform: uppercase; }}
+.sdivider {{ width: 1px; height: 28px; background: var(--border); }}
+.lat-pill {{
+  margin-left: auto; font-family: var(--mono); font-size: 9px;
+  letter-spacing: 1px; color: var(--dim); background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 3px; padding: 4px 10px;
+}}
+.lat-pill.fast {{ color: var(--live); border-color: var(--live-dim); background: var(--live-dim); }}
+.lat-pill.slow {{ color: var(--warn); }}
 
+/* ── Controls ── */
+.controls {{
+  padding: 18px 0 24px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}}
+.btn-rec {{
+  display: flex; align-items: center; gap: 10px;
+  background: var(--text); color: var(--bg);
+  border: none; border-radius: 4px; cursor: pointer;
+  padding: 13px 28px; font-family: var(--sans);
+  font-size: 13px; font-weight: 600;
+  transition: background 0.15s; user-select: none; flex-shrink: 0;
+}}
+.btn-rec:hover {{ background: #dedad4; }}
+.btn-rec.on {{
+  background: transparent; color: var(--text);
+  border: 1.5px solid var(--border);
+}}
+.btn-rec.on:hover {{ border-color: var(--mid); }}
+.rdot {{
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bg); flex-shrink: 0; transition: background 0.2s;
+}}
+.btn-rec.on .rdot {{ background: var(--live); animation: pl 0.8s ease-in-out infinite; }}
+.btn-sec {{
+  background: transparent; border: 1px solid var(--border);
+  color: var(--mid); border-radius: 4px;
+  padding: 12px 20px; font-family: var(--sans);
+  font-size: 13px; cursor: pointer; transition: all 0.15s;
+}}
+.btn-sec:hover {{ border-color: var(--mid); color: var(--text); }}
+.btn-sec:disabled {{ opacity: 0.3; cursor: not-allowed; }}
+.view-toggle {{
+  margin-left: auto; display: flex;
+  border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+}}
+.vbtn {{
+  background: transparent; border: none;
+  color: var(--dim); font-family: var(--mono);
+  font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+  padding: 10px 14px; cursor: pointer; transition: all 0.15s;
+}}
+.vbtn.on {{ background: var(--surface2); color: var(--text); }}
 
-def handle_result(result, source_label):
-    st.session_state.total_calls += 1
-    if result["error"]:
-        st.session_state.error_msg   = result["error"]
-        st.session_state.last_result = None
-    else:
-        st.session_state.error_msg     = None
-        st.session_state.last_result   = result["text"]
-        st.session_state.last_engine   = result["engine"]
-        st.session_state.last_duration = result["duration_s"]
-        st.session_state.history.append({
-            "text": result["text"], "engine": result["engine"],
-            "duration": result["duration_s"], "source": source_label,
-            "time": datetime.now().strftime("%H:%M:%S"),
-        })
+/* ── Panels ── */
+.tx-panel, .log-panel {{
+  display: none; border-top: 1px solid var(--border);
+  padding: 14px 0; max-height: 200px; overflow-y: auto;
+  flex-direction: column; gap: 0;
+}}
+.tx-panel.open, .log-panel.open {{ display: flex; }}
+.tx-panel::-webkit-scrollbar, .log-panel::-webkit-scrollbar {{ width: 3px; }}
+.tx-panel::-webkit-scrollbar-thumb, .log-panel::-webkit-scrollbar-thumb {{ background: var(--border); }}
+.tx-row {{
+  display: grid; grid-template-columns: 52px 1fr;
+  gap: 12px; padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}}
+.tx-row:last-child {{ border-bottom: none; }}
+.tx-t {{ font-family: var(--mono); font-size: 9px; color: var(--dim); padding-top: 2px; }}
+.tx-s {{ font-size: 13px; color: var(--mid); line-height: 1.6; }}
+.log-line {{ font-family: var(--mono); font-size: 9px; letter-spacing: 0.3px; line-height: 2.1; }}
+.log-line.ok    {{ color: var(--live); }}
+.log-line.warn  {{ color: var(--warn); }}
+.log-line.debug {{ color: var(--accent); }}
+.log-line.info  {{ color: var(--dim); }}
 
+/* ── Toast ── */
+.toast {{
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--surface2); border: 1px solid var(--warn);
+  color: var(--warn); font-family: var(--mono); font-size: 10px;
+  padding: 10px 20px; border-radius: 4px; display: none;
+  z-index: 999; white-space: nowrap; letter-spacing: 0.3px;
+  animation: ti 0.2s ease-out;
+}}
+.toast.show {{ display: block; }}
+@keyframes ti {{ from{{opacity:0;transform:translateX(-50%) translateY(8px)}} to{{opacity:1;transform:translateX(-50%) translateY(0)}} }}
+</style>
+</head>
+<body>
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HERO HEADER
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="hero">
-  <div class="hero-eyebrow">ESP32-S3 · Edge ASR </div>
-  <div class="hero-title">Hinglish ASR</div>
-  <div class="hero-subtitle">
-    Automatic Speech Recognition for <strong>code-mixed Hindi-English (Hinglish)</strong> speech —
-    record live in your browser or upload an audio file.
-    Powered by <strong></strong> on Modal serverless GPU.
+<!-- Top bar -->
+<div class="topbar">
+  <div class="badges">
+    <span class="brand">Hinglish ASR</span>
+    <span class="badge">ESP32-S3</span>
+    <span class="badge">Live Captions</span>
   </div>
-  <div class="hero-author">by <span></span> · B.Tech IT · GCET · 2025</div>
-  <div style="margin-top:10px">
-    <span class="model-pill"><span class="model-dot"></span></span>
-    <span class="model-pill"><span class="model-dot"></span>modal serverless</span>
-    <span class="model-pill"><span class="model-dot"></span>hinglish · hi-IN + en</span>
+  <div class="status-row">
+    <div class="sdot" id="sd"></div>
+    <span class="slbl" id="sl">Idle</span>
   </div>
 </div>
-""", unsafe_allow_html=True)
 
-st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+<!-- Main -->
+<div class="main">
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TABS — Browser Mic  |  Upload File
-# ─────────────────────────────────────────────────────────────────────────────
-tab_mic, tab_upload = st.tabs(["🎙  LIVE RECORD", "📁  UPLOAD FILE"])
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — BROWSER MICROPHONE (real-time via HTML5 MediaRecorder + st.components)
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_mic:
-    st.markdown("")
-    st.markdown(
-        "Record directly in your browser — speak naturally in **Hinglish** "
-        "(mix of Hindi and English). Click **Start Recording**, speak, then **Stop & Transcribe**."
-    )
-    st.caption("Works best in Chrome or Edge · Mic permission required · No data stored")
-    st.markdown("")
-
-    # ── Embed HTML5 recorder ──────────────────────────────────────────────────
-    # Uses MediaRecorder API to capture audio, encodes to base64,
-    # then sends back to Streamlit via st.components postMessage / query params.
-    # The audio blob is passed to the Python transcription function.
-
-    recorder_html = """
-    <div style="background:#f8f6f2;border:1px solid #e0dcd4;border-radius:6px;padding:24px 20px;font-family:'IBM Plex Sans',sans-serif;">
-
-      <div id="status" style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:2px;color:#8a8680;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
-        <div id="status-dot" style="width:7px;height:7px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
-        <span id="status-text">READY · CLICK START TO RECORD</span>
+  <!-- Caption stage -->
+  <div class="stage" id="stage">
+    <div class="ghost" id="ghost">
+      <div class="ghost-icon">🎙</div>
+      <div class="ghost-txt">
+        Press <strong>Start Recording</strong> and speak<br>
+        Hindi, English, or Hinglish — captions appear live
       </div>
-
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
-        <button id="btn-start" onclick="startRec()"
-          style="background:#1a1816;color:#f0ece4;border:none;border-radius:3px;padding:10px 22px;
-                 font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:1.5px;
-                 cursor:pointer;transition:opacity 0.2s;">
-          ⏺ START RECORDING
-        </button>
-        <button id="btn-stop" onclick="stopRec()" disabled
-          style="background:#f0ece4;color:#8a8680;border:1px solid #d4d0c8;border-radius:3px;
-                 padding:10px 22px;font-family:'IBM Plex Mono',monospace;font-size:10px;
-                 letter-spacing:1.5px;cursor:not-allowed;">
-          ⏹ STOP
-        </button>
-        <span id="timer" style="font-family:'IBM Plex Mono',monospace;font-size:18px;
-              font-weight:300;color:#1a1816;letter-spacing:2px;">00:00</span>
-      </div>
-
-      <canvas id="waveform" width="680" height="44"
-        style="width:100%;height:44px;background:transparent;display:block;margin-bottom:12px;">
-      </canvas>
-
-      <div id="result-section" style="display:none;">
-        <div style="height:1px;background:#e0dcd4;margin:12px 0;"></div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;color:#8a8680;margin-bottom:6px;">RECORDING READY</div>
-        <audio id="preview" controls style="width:100%;height:36px;margin-bottom:10px;"></audio>
-        <button id="btn-transcribe" onclick="sendAudio()"
-          style="width:100%;background:#1a1816;color:#f0ece4;border:none;border-radius:3px;
-                 padding:11px;font-family:'IBM Plex Mono',monospace;font-size:10px;
-                 letter-spacing:2px;cursor:pointer;">
-          TRANSCRIBE WITH WHISPER →
-        </button>
-      </div>
-
-      <!-- Hidden form to send audio data back to Streamlit -->
-      <input type="hidden" id="audio-data" />
-      <input type="hidden" id="audio-ready" value="0" />
     </div>
+    <div class="hist-wrap" id="hist"></div>
+    <div class="caption-cur" id="cap">
+      <span class="caret off" id="caret"></span>
+    </div>
+  </div>
 
-    <script>
-    let mediaRec = null, chunks = [], stream = null;
-    let recSecs = 0, timerInterval = null, wvFrame = null;
-    let audioctx = null, analyser = null, dataArr = null;
-    let audioBlob = null;
+  <!-- Waveform -->
+  <div class="wv-wrap">
+    <canvas id="wv"></canvas>
+    <div class="wv-fade"></div>
+  </div>
 
-    const btnStart   = document.getElementById('btn-start');
-    const btnStop    = document.getElementById('btn-stop');
-    const btnTrans   = document.getElementById('btn-transcribe');
-    const timerEl    = document.getElementById('timer');
-    const statusDot  = document.getElementById('status-dot');
-    const statusText = document.getElementById('status-text');
-    const resultSec  = document.getElementById('result-section');
-    const preview    = document.getElementById('preview');
-    const canvas     = document.getElementById('waveform');
-    const ctx        = canvas.getContext('2d');
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat"><div class="sval" id="sv-time">0:00</div><div class="slabel">Duration</div></div>
+    <div class="sdivider"></div>
+    <div class="stat"><div class="sval" id="sv-words">0</div><div class="slabel">Words</div></div>
+    <div class="sdivider"></div>
+    <div class="stat"><div class="sval" id="sv-segs">0</div><div class="slabel">Segments</div></div>
+    <span class="lat-pill" id="lat">— ms</span>
+  </div>
 
-    function setStatus(state, msg) {
-      const colors = { idle:'#ccc', recording:'#ff4444', ready:'#62DE61', processing:'#ffaa00' };
-      statusDot.style.background = colors[state] || '#ccc';
-      if (state === 'recording') statusDot.style.animation = 'none';
-      statusText.textContent = msg;
-    }
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn-rec" id="brec" onclick="handleRec()">
+      <span class="rdot"></span>
+      <span id="blbl">Start Recording</span>
+    </button>
+    <button class="btn-sec" id="bclr" onclick="clearAll()" disabled>Clear</button>
+    <div class="view-toggle">
+      <button class="vbtn on" id="v-cap" onclick="setView('cap')">Caption</button>
+      <button class="vbtn"    id="v-tx"  onclick="setView('tx')">Full</button>
+      <button class="vbtn"    id="v-log" onclick="setView('log')">Log</button>
+    </div>
+  </div>
 
-    async function startRec() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-        });
-      } catch(e) {
-        setStatus('idle', 'MIC PERMISSION DENIED — ALLOW IN BROWSER SETTINGS');
-        return;
-      }
+  <!-- Panels -->
+  <div class="tx-panel"  id="tx-panel"></div>
+  <div class="log-panel" id="log-panel"></div>
 
-      chunks = []; recSecs = 0; audioBlob = null;
-      resultSec.style.display = 'none';
+</div>
 
-      // Waveform analyser
-      try {
-        audioctx = new (window.AudioContext || window.webkitAudioContext)();
-        const src = audioctx.createMediaStreamSource(stream);
-        analyser  = audioctx.createAnalyser(); analyser.fftSize = 256;
-        dataArr   = new Uint8Array(analyser.frequencyBinCount);
-        src.connect(analyser);
-      } catch(e) { analyser = null; }
+<!-- Toast -->
+<div class="toast" id="toast"></div>
 
-      const mime = ['audio/webm;codecs=opus','audio/webm','audio/ogg']
-        .find(m => MediaRecorder.isTypeSupported(m)) || '';
-      try { mediaRec = new MediaRecorder(stream, mime ? {mimeType:mime} : {}); }
-      catch(e) { mediaRec = new MediaRecorder(stream); }
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG — injected from Python
+// ─────────────────────────────────────────────────────────────────────────────
+const API      = '{API_ENDPOINT}';
+const CHUNK_MS = {CHUNK_MS};
+const MAX_HIST = 4;
 
-      mediaRec.ondataavailable = e => { if(e.data?.size > 0) chunks.push(e.data); };
-      mediaRec.onstop = onStop;
-      mediaRec.start(100);
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────────────────────────────────────
+let recording = false, stream = null, mediaRec = null;
+let audioctx = null, analyser = null, pcmBuf = null;
+let wvFrame = null, clockTimer = null, chunkTimer = null;
+let recStart = null, totalWords = 0, totalSegs = 0;
+let histLines = [], currentView = 'cap';
 
-      // UI
-      btnStart.disabled = true; btnStart.style.opacity = '0.4';
-      btnStop.disabled  = false; btnStop.style.cursor = 'pointer';
-      btnStop.style.background = '#2a2826'; btnStop.style.color = '#f0ece4';
-      btnStop.style.borderColor = '#2a2826';
-      setStatus('recording', 'RECORDING · SPEAK NOW IN HINGLISH');
+// ─────────────────────────────────────────────────────────────────────────────
+// ELEMENTS
+// ─────────────────────────────────────────────────────────────────────────────
+const brec    = document.getElementById('brec');
+const blbl    = document.getElementById('blbl');
+const bclr    = document.getElementById('bclr');
+const capEl   = document.getElementById('cap');
+const caretEl = document.getElementById('caret');
+const histEl  = document.getElementById('hist');
+const ghostEl = document.getElementById('ghost');
+const sdEl    = document.getElementById('sd');
+const slEl    = document.getElementById('sl');
+const latEl   = document.getElementById('lat');
+const txPanel = document.getElementById('tx-panel');
+const logPanel= document.getElementById('log-panel');
+const toast   = document.getElementById('toast');
+const canvas  = document.getElementById('wv');
+const ctx     = canvas.getContext('2d');
 
-      // Timer
-      timerInterval = setInterval(() => {
-        recSecs++;
-        timerEl.textContent = pad(Math.floor(recSecs/60)) + ':' + pad(recSecs%60);
-        if (recSecs >= 30) stopRec();
-      }, 1000);
+// ─────────────────────────────────────────────────────────────────────────────
+// STATUS
+// ─────────────────────────────────────────────────────────────────────────────
+function setStatus(cls, lbl) {{
+  sdEl.className = 'sdot ' + cls;
+  slEl.className = 'slbl ' + cls;
+  slEl.textContent = lbl;
+}}
 
-      drawWave();
-    }
+// ─────────────────────────────────────────────────────────────────────────────
+// RECORD
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleRec() {{
+  if (recording) {{ stopRec(); return; }}
+  await startRec();
+}}
 
-    function stopRec() {
-      clearInterval(timerInterval);
-      cancelAnimationFrame(wvFrame);
-      if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
-      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-      if (audioctx) { audioctx.close(); audioctx = null; }
-      analyser = null;
-      btnStart.disabled = false; btnStart.style.opacity = '1';
-      btnStop.disabled  = true;
-      btnStop.style.background = '#f0ece4'; btnStop.style.color = '#8a8680';
-      btnStop.style.borderColor = '#d4d0c8'; btnStop.style.cursor = 'not-allowed';
-      // clear waveform
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
+async function startRec() {{
+  try {{
+    stream = await navigator.mediaDevices.getUserMedia({{
+      audio: {{ sampleRate: 16000, channelCount: 1,
+               echoCancellation: true, noiseSuppression: true }}
+    }});
+  }} catch(e) {{
+    showToast('Mic denied — allow microphone in browser settings');
+    return;
+  }}
+  try {{
+    audioctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = audioctx.createMediaStreamSource(stream);
+    analyser  = audioctx.createAnalyser(); analyser.fftSize = 512;
+    pcmBuf    = new Uint8Array(analyser.frequencyBinCount);
+    src.connect(analyser);
+  }} catch(_) {{ analyser = null; }}
 
-    function onStop() {
-      audioBlob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
-      preview.src = URL.createObjectURL(audioBlob);
-      resultSec.style.display = 'block';
-      setStatus('ready', 'RECORDING COMPLETE · ' + timerEl.textContent + ' · READY TO TRANSCRIBE');
-    }
+  recording = true; recStart = Date.now();
+  brec.classList.add('on'); blbl.textContent = 'Stop';
+  bclr.disabled = true;
+  ghostEl.classList.add('hidden');
+  caretEl.classList.remove('off');
+  setStatus('live', 'Live');
+  clockTimer = setInterval(() => {{
+    const s = Math.floor((Date.now() - recStart) / 1000);
+    document.getElementById('sv-time').textContent =
+      Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+  }}, 500);
+  startChunk();
+  drawWave();
+  addLog('ok', 'Recording started');
+}}
 
-    function sendAudio() {
-      if (!audioBlob) return;
-      setStatus('processing', 'ENCODING AUDIO...');
-      btnTrans.textContent = 'ENCODING...';
-      btnTrans.disabled = true;
+function startChunk() {{
+  if (!recording) return;
+  let chunks = [];
+  const mime = ['audio/webm;codecs=opus','audio/webm','audio/ogg']
+    .find(m => MediaRecorder.isTypeSupported(m)) || '';
+  try {{ mediaRec = new MediaRecorder(stream, mime ? {{mimeType:mime}} : {{}}); }}
+  catch(_) {{ mediaRec = new MediaRecorder(stream); }}
+  mediaRec.ondataavailable = e => {{ if (e.data?.size > 0) chunks.push(e.data); }};
+  mediaRec.onstop = () => {{
+    const blob = new Blob(chunks, {{type: chunks[0]?.type || 'audio/webm'}});
+    sendChunk(blob);
+  }};
+  mediaRec.start(100);
+  chunkTimer = setTimeout(() => {{
+    if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+  }}, CHUNK_MS);
+}}
 
-      const reader = new FileReader();
-      reader.onload = () => {
-        // Send base64 to Streamlit via URL param trick using query string
-        const b64 = reader.result.split(',')[1];
-        // Store in sessionStorage so Streamlit JS component can read it
-        window.parent.postMessage({
-          type: 'streamlit:setComponentValue',
-          value: b64
-        }, '*');
-        setStatus('processing', 'SENT TO STREAMLIT · TRANSCRIBING...');
-      };
-      reader.readAsDataURL(audioBlob);
-    }
+function stopRec() {{
+  recording = false;
+  clearInterval(clockTimer); clearTimeout(chunkTimer);
+  if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+  if (stream) {{ stream.getTracks().forEach(t => t.stop()); stream = null; }}
+  if (audioctx) {{ audioctx.close(); audioctx = null; }}
+  cancelAnimationFrame(wvFrame); analyser = null; pcmBuf = null;
+  brec.classList.remove('on'); blbl.textContent = 'Start Recording';
+  bclr.disabled = false;
+  caretEl.classList.add('off');
+  setStatus('', 'Ready');
+  flatLine();
+  addLog('ok', 'Recording stopped');
+}}
 
-    function drawWave() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.strokeStyle = '#2a2826'; ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      const w = canvas.width, h = canvas.height, mid = h / 2;
-      if (analyser && dataArr) {
-        analyser.getByteTimeDomainData(dataArr);
-        const step = w / dataArr.length;
-        for (let i = 0; i < dataArr.length; i++) {
-          const y = mid + (dataArr[i] / 128 - 1) * mid * 0.8;
-          i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * step, y);
-        }
-      } else {
-        const t = Date.now() / 300;
-        for (let x = 0; x < w; x++) {
-          const y = mid + Math.sin(x/18+t)*7 + Math.sin(x/8+t*1.4)*4;
-          x === 0 ? ctx.moveTo(0, y) : ctx.lineTo(x, y);
-        }
-      }
-      ctx.stroke();
-      if (mediaRec && mediaRec.state === 'recording') wvFrame = requestAnimationFrame(drawWave);
-    }
+// ─────────────────────────────────────────────────────────────────────────────
+// SEND CHUNK → API
+// ─────────────────────────────────────────────────────────────────────────────
+async function sendChunk(blob) {{
+  if (blob.size < 800) {{
+    addLog('debug', 'Chunk too small (' + blob.size + 'B) — silence skipped');
+    if (recording) startChunk();
+    return;
+  }}
+  setStatus('proc', 'Processing…');
+  addLog('debug', 'Chunk: ' + Math.round(blob.size/1024) + 'KB');
+  const t0 = Date.now();
+  const fd  = new FormData();
+  fd.append('file', blob, 'chunk.webm');
+  try {{
+    const ctrl = new AbortController();
+    const to   = setTimeout(() => ctrl.abort(), 30000);
+    const res  = await fetch(API, {{method:'POST', body:fd, signal:ctrl.signal}});
+    clearTimeout(to);
+    const ms = Date.now() - t0;
+    updateLat(ms);
+    if (!res.ok) {{
+      const body = await res.text().catch(() => '');
+      addLog('warn', 'HTTP ' + res.status + ' — ' + body.slice(0,80));
+      showToast('API error ' + res.status);
+    }} else {{
+      const data = await res.json();
+      const text = (data.transcription || data.text || data.result || '').trim();
+      if (text) {{
+        pushCaption(text, ms);
+        addLog('ok', '[' + ms + 'ms] ' + text);
+      }} else {{
+        addLog('debug', 'Empty — silence');
+      }}
+    }}
+  }} catch(err) {{
+    if (err.name === 'AbortError') {{
+      addLog('warn', 'Timeout after 30s');
+      showToast('API timeout — skipping chunk');
+    }} else {{
+      addLog('warn', err.message);
+    }}
+  }}
+  if (recording) {{ setStatus('live','Live'); startChunk(); }}
+}}
 
-    const pad = n => String(n).padStart(2, '0');
-    </script>
-    """
+// ─────────────────────────────────────────────────────────────────────────────
+// CAPTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+function pushCaption(text, ms) {{
+  const wc = text.split(/\s+/).filter(Boolean).length;
+  totalWords += wc; totalSegs++;
+  document.getElementById('sv-words').textContent = totalWords;
+  document.getElementById('sv-segs').textContent  = totalSegs;
 
-    # Render recorder component and capture returned base64 audio
-    import streamlit.components.v1 as components
-    audio_b64 = components.html(recorder_html, height=320, scrolling=False)
+  const ts = new Date().toLocaleTimeString('en-IN',
+    {{hour:'2-digit',minute:'2-digit',second:'2-digit'}});
+  addTxRow(ts, text);
 
-    st.markdown("")
-    st.info(
-        "**How to use:** Click **⏺ START RECORDING** → speak in Hinglish → click **⏹ STOP** → "
-        "preview your recording → click **TRANSCRIBE WITH WHISPER →**\n\n"
-        "The audio is sent to your Modal Whisper endpoint for transcription.",
-        icon="ℹ️"
-    )
+  const prev = capEl.getAttribute('data-text') || '';
+  if (prev.trim()) {{
+    histLines.push(prev.trim());
+    if (histLines.length > MAX_HIST) histLines.shift();
+    renderHist();
+  }}
+  renderCap(text);
+  capEl.setAttribute('data-text', text);
+  bclr.disabled = false;
+}}
 
-    # ── Alternative: manual upload of recorded audio for mic tab ─────────────
-    st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
-    st.markdown("##### Or paste / upload your recorded audio below")
-    st.caption("If the recorder above doesn't work in your browser, record using your phone's Voice Memo app and upload here.")
+function renderHist() {{
+  histEl.innerHTML = '';
+  histLines.forEach((l, i) => {{
+    const d = document.createElement('div');
+    d.className = 'hist-line';
+    d.textContent = l;
+    const age = histLines.length - 1 - i;
+    d.style.opacity  = Math.max(0.08, 0.38 - age * 0.07);
+    d.style.fontSize = Math.max(14, 18 - age) + 'px';
+    histEl.appendChild(d);
+  }});
+}}
 
-    mic_file = st.file_uploader(
-        "Upload recorded audio",
-        type=["wav", "mp3", "m4a", "ogg", "webm", "flac", "opus"],
-        key="mic_upload",
-        label_visibility="collapsed",
-    )
-    if mic_file:
-        st.audio(mic_file)
-        if st.button("Transcribe with Whisper →", type="primary",
-                     use_container_width=True, key="mic_transcribe"):
-            with st.spinner("Sending to Whisper via Modal… (~3–30s depending on cold start)"):
-                result = transcribe(mic_file.getvalue(), filename=mic_file.name)
-            handle_result(result, "mic-upload")
-            st.rerun()
+function renderCap(text) {{
+  capEl.innerHTML = '';
+  text.split(/(\s+)/).forEach((w, i) => {{
+    const s = document.createElement('span');
+    if (/\s/.test(w)) {{ s.textContent = w; }}
+    else {{
+      s.className = 'word-new';
+      s.textContent = w;
+      s.style.animationDelay = (i * 0.038) + 's';
+    }}
+    capEl.appendChild(s);
+  }});
+  capEl.appendChild(caretEl);
+}}
 
+// ─────────────────────────────────────────────────────────────────────────────
+// WAVEFORM
+// ─────────────────────────────────────────────────────────────────────────────
+function drawWave() {{
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = canvas.offsetWidth  * dpr;
+  canvas.height = canvas.offsetHeight * dpr;
+  ctx.scale(dpr, dpr);
+  const w = canvas.offsetWidth, h = canvas.offsetHeight, mid = h / 2;
+  ctx.clearRect(0, 0, w, h);
+  if (analyser && pcmBuf) {{
+    analyser.getByteTimeDomainData(pcmBuf);
+    ctx.strokeStyle = '#5a9fff'; ctx.lineWidth = 1.5;
+    ctx.shadowColor = '#5a9fff'; ctx.shadowBlur = 4;
+    ctx.beginPath();
+    const step = w / pcmBuf.length;
+    for (let i = 0; i < pcmBuf.length; i++) {{
+      const y = mid + (pcmBuf[i] / 128 - 1) * mid * 0.85;
+      i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * step, y);
+    }}
+    ctx.stroke(); ctx.shadowBlur = 0;
+  }} else {{
+    const t = Date.now() / 400;
+    ctx.strokeStyle = '#262626'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {{
+      const y = mid + Math.sin(x/20+t)*4 + Math.sin(x/9+t*1.3)*2;
+      x===0 ? ctx.moveTo(0,y) : ctx.lineTo(x,y);
+    }}
+    ctx.stroke();
+  }}
+  if (recording) wvFrame = requestAnimationFrame(drawWave);
+}}
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — FILE UPLOAD
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_upload:
-    st.markdown("")
-    st.markdown(
-        "Upload any Hinglish audio file. Supports recordings from phones, "
-        "laptops, ESP32-S3, or any other source."
-    )
-    st.caption("WAV · MP3 · M4A · OGG · WEBM · FLAC · OPUS · Max 25 MB")
-    st.markdown("")
+function flatLine() {{
+  const w = canvas.offsetWidth || 800, h = canvas.offsetHeight || 48;
+  ctx.clearRect(0,0,w,h);
+  ctx.strokeStyle = '#262626'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
+}}
 
-    uploaded = st.file_uploader(
-        "Drop audio file here or click to browse",
-        type=["wav", "mp3", "m4a", "ogg", "webm", "flac", "opus"],
-        label_visibility="collapsed",
-        key="file_upload",
-    )
+// ─────────────────────────────────────────────────────────────────────────────
+// LATENCY
+// ─────────────────────────────────────────────────────────────────────────────
+function updateLat(ms) {{
+  latEl.textContent = ms + 'ms';
+  latEl.className   = 'lat-pill' + (ms < 8000 ? ' fast' : ' slow');
+}}
 
-    if uploaded:
-        st.audio(uploaded, format=uploaded.type or "audio/wav")
-        file_mb = len(uploaded.getvalue()) / (1024 * 1024)
-        if file_mb > MAX_FILE_MB:
-            st.error(f"File too large ({file_mb:.1f} MB). Maximum is {MAX_FILE_MB} MB.")
-            uploaded = None
-        else:
-            st.markdown(
-                f'<span class="chip chip-info">{uploaded.name}</span> '
-                f'<span class="chip chip-ok">{file_mb:.2f} MB</span>',
-                unsafe_allow_html=True,
-            )
-            st.markdown("")
+// ─────────────────────────────────────────────────────────────────────────────
+// VIEWS
+// ─────────────────────────────────────────────────────────────────────────────
+function setView(v) {{
+  currentView = v;
+  ['cap','tx','log'].forEach(id => {{
+    document.getElementById('v-'+id).classList.toggle('on', id===v);
+  }});
+  txPanel.classList.toggle('open',  v==='tx');
+  logPanel.classList.toggle('open', v==='log');
+}}
 
-    btn_off = uploaded is None
-    if st.button("Transcribe with Whisper →", type="primary",
-                 disabled=btn_off, use_container_width=True, key="file_transcribe"):
-        with st.spinner("Sending to Whisper via Modal… (~3–30s on first call)"):
-            result = transcribe(uploaded.getvalue(), filename=uploaded.name)
-        handle_result(result, "file-upload")
-        st.rerun()
+// ─────────────────────────────────────────────────────────────────────────────
+// PANELS
+// ─────────────────────────────────────────────────────────────────────────────
+function addTxRow(ts, text) {{
+  const d = document.createElement('div');
+  d.className = 'tx-row';
+  d.innerHTML = `<div class="tx-t">${{ts}}</div><div class="tx-s">${{text}}</div>`;
+  txPanel.appendChild(d);
+  txPanel.scrollTop = txPanel.scrollHeight;
+}}
 
-    if btn_off:
-        st.caption("Upload an audio file above to enable transcription.")
+function addLog(type, msg) {{
+  const ts = new Date().toLocaleTimeString('en-IN');
+  const d  = document.createElement('div');
+  d.className = 'log-line ' + type;
+  d.textContent = '[' + ts + '] ' + msg;
+  logPanel.appendChild(d);
+  logPanel.scrollTop = logPanel.scrollHeight;
+}}
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CLEAR
+// ─────────────────────────────────────────────────────────────────────────────
+function clearAll() {{
+  histLines = []; histEl.innerHTML = '';
+  txPanel.innerHTML = ''; logPanel.innerHTML = '';
+  capEl.innerHTML = ''; capEl.appendChild(caretEl);
+  capEl.removeAttribute('data-text');
+  totalWords = 0; totalSegs = 0;
+  document.getElementById('sv-words').textContent = '0';
+  document.getElementById('sv-segs').textContent  = '0';
+  document.getElementById('sv-time').textContent  = '0:00';
+  latEl.textContent = '— ms'; latEl.className = 'lat-pill';
+  ghostEl.classList.remove('hidden');
+  bclr.disabled = true;
+}}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RESULT — shown below both tabs
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+// ─────────────────────────────────────────────────────────────────────────────
+// TOAST
+// ─────────────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg) {{
+  toast.textContent = msg; toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 4000);
+}}
 
-if st.session_state.error_msg:
-    st.markdown("#### ❌ Transcription Failed")
-    st.error(st.session_state.error_msg)
-    st.caption("Modal cold starts can take 15–30s. Try again — the second call is always faster.")
+// ─────────────────────────────────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────────────────────────────────
+flatLine();
+window.addEventListener('resize', () => {{ if (!recording) flatLine(); }});
+addLog('ok', 'System ready');
+addLog('info', 'API: ' + API.split('//')[1].split('/')[0]);
+addLog('info', 'Chunk: ' + CHUNK_MS + 'ms · Max history: ' + MAX_HIST + ' lines');
+</script>
+</body>
+</html>
+"""
 
-elif st.session_state.last_result:
-    st.markdown("#### ✅ Transcription")
-    engine_label = (
-        '<span class="ep-primary">primary · kirti · ahamkirtivardhansingh</span>'
-        if st.session_state.last_engine == "primary"
-        else '<span class="ep-fallback">fallback · dhruv · dhruv-04</span>'
-    )
-    st.markdown(
-        f'<div class="result-box">{st.session_state.last_result}</div>'
-        f'<div class="meta-row">'
-        f'<span>openai whisper large-v3-turbo · modal gpu · {engine_label}</span>'
-        f'<span>{st.session_state.last_duration}s</span></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("")
-    st.text_area("", value=st.session_state.last_result, height=72,
-                 label_visibility="collapsed", key="copy_area")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("⬇ Download .txt", data=st.session_state.last_result,
-                           file_name="transcription.txt", mime="text/plain",
-                           use_container_width=True)
-    with c2:
-        if st.button("✕ Clear", use_container_width=True):
-            st.session_state.last_result = None
-            st.rerun()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### 🎙 Hinglish ASR")
-    st.markdown("**Kirti Vardhan Singh**  \nB.Tech IT · GCET · AKTU  \n2025")
-    st.markdown('<div style="height:1px;background:#e0dcd4;margin:12px 0"></div>', unsafe_allow_html=True)
-
-    st.markdown("### Model")
-    st.markdown(
-        "**OpenAI Whisper**  \n`large-v3-turbo`  \n\n"
-        "Multilingual model with strong Hinglish performance. "
-        "Handles Hindi-English code-switching natively."
-    )
-    st.markdown('<div style="height:1px;background:#e0dcd4;margin:12px 0"></div>', unsafe_allow_html=True)
-
-    st.markdown("### Endpoints")
-    st.markdown(
-        "**Primary** *(Kirti)*  \n"
-        "`ahamkirtivardhansingh`  \n"
-        "`hinglish-asr-api`  \n\n"
-        "**Fallback** *(Dhruv)*  \n"
-        "`dhruv-04`  \n"
-        "`esp32-whisper-hinglish`  \n\n"
-        "Auto-switches on `429` / `503`."
-    )
-    st.markdown('<div style="height:1px;background:#e0dcd4;margin:12px 0"></div>', unsafe_allow_html=True)
-
-    st.markdown("### Session")
-    st.metric("API calls", st.session_state.total_calls)
-    st.markdown('<div style="height:1px;background:#e0dcd4;margin:12px 0"></div>', unsafe_allow_html=True)
-
-    if st.session_state.history:
-        st.markdown("### History")
-        for entry in reversed(st.session_state.history[-8:]):
-            tag = "primary" if entry["engine"] == "primary" else "fallback"
-            st.markdown(
-                f'<div class="history-entry">'
-                f'<div class="history-text">{entry["text"][:100]}{"…" if len(entry["text"])>100 else ""}</div>'
-                f'<div class="history-meta">{entry["time"]} · {entry["source"]} · {entry["duration"]}s · {tag}</div>'
-                f'</div>', unsafe_allow_html=True,
-            )
-        if st.button("Clear history"):
-            st.session_state.history = []
-            st.rerun()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FOOTER
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown(
-    '<p style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:#9a9690;text-align:center;margin-top:8px;">'
-    'Hinglish ASR · OpenAI Whisper large-v3-turbo · Modal Serverless · '
-    'Kirti Vardhan Singh · GCET · AKTU · 2025'
-    '</p>',
-    unsafe_allow_html=True,
-)
+# Render the full app as an HTML component filling the viewport
+components.html(APP_HTML, height=780, scrolling=False)
